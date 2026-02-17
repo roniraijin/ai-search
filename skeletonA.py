@@ -356,63 +356,78 @@ added_note = ""
 ############
 ############ END OF SECTOR 9 (IGNORE THIS COMMENT)
 
-# 1. Create the initial tour (problem.INITIAL)
-current_tour = list(range(num_cities))
+dm = dist_matrix
+n = num_cities
+
+def swap_delta(tour, i, j):
+    if i == j:
+        return 0
+    if i > j:
+        i, j = j, i
+
+    a = tour[i]
+    b = tour[j]
+
+    im1 = tour[(i - 1) % n]
+    ip1 = tour[(i + 1) % n]
+    jm1 = tour[(j - 1) % n]
+    jp1 = tour[(j + 1) % n]
+
+    # Adjacent in the tour order includes wrap-around adjacency (0 and n-1)
+    adjacent = (j == i + 1) or (i == 0 and j == n - 1)
+
+    if adjacent:
+        # Ensure we treat them in the order ... im1 - a - b - jp1 ...
+        # If it's wrap-around adjacency, the order is ... jm1 - b - a - ip1 ... effectively
+        if j == i + 1:
+            old = dm[im1][a] + dm[a][b] + dm[b][jp1]
+            new = dm[im1][b] + dm[b][a] + dm[a][jp1]
+        else:
+            # i=0, j=n-1 (wrap). Tour fragment: ... jm1 - b - a - ip1 ...
+            old = dm[jm1][b] + dm[b][a] + dm[a][ip1]
+            new = dm[jm1][a] + dm[a][b] + dm[b][ip1]
+    else:
+        old = dm[im1][a] + dm[a][ip1] + dm[jm1][b] + dm[b][jp1]
+        new = dm[im1][b] + dm[b][ip1] + dm[jm1][a] + dm[a][jp1]
+
+    return new - old
+
+current_tour = list(range(n))
 random.shuffle(current_tour)
 
-# 2. Calculate the distance of this initial tour (VALUE(current))
-# This creates the variable 'tour_length' so the error goes away
+# initial length (O(n) once)
 tour_length = 0
-for i in range(num_cities - 1):
-    tour_length += dist_matrix[current_tour[i]][current_tour[i+1]]
-tour_length += dist_matrix[current_tour[num_cities-1]][current_tour[0]]
+for k in range(n - 1):
+    tour_length += dm[current_tour[k]][current_tour[k+1]]
+tour_length += dm[current_tour[n-1]][current_tour[0]]
 
-# 3. Now you can assign it to your SA tracking variable
-current_val = tour_length 
+current_val = tour_length
 best_tour = current_tour[:]
-best_val = tour_length
+best_val = current_val
 
-T = 100
-cooling_rate = 0.9995
+T = 50
+cooling_rate = 0.999999
 
-while T > 0.0001: 
-    T = T * cooling_rate
-    
+while T > 0.0001:
+    T *= cooling_rate
 
-    # next <- randomly selected successor
-    # (Base implementation: swap two cities)
-    i, j = random.sample(range(num_cities), 2)
-    next_tour = current_tour[:]
-    next_tour[i], next_tour[j] = next_tour[j], next_tour[i]
-    
-    # VALUE calculation
-    # Note: tour_length calculation must be an integer for Sector 10
-    next_val = 0
-    for k in range(num_cities - 1):
-        next_val += dist_matrix[next_tour[k]][next_tour[k+1]]
-    next_val += dist_matrix[next_tour[num_cities-1]][next_tour[0]]
-    
-    # ∆E <- VALUE(current) - VALUE(next)
-    delta_e = current_val - next_val
-    
-    # Acceptance Logic
-    if delta_e > 0:
-        current_tour = next_tour
+    i, j = random.sample(range(n), 2)
+
+    delta = swap_delta(current_tour, i, j)   # next - current
+    next_val = current_val + delta
+
+    delta_e = current_val - next_val         # current - next
+
+    if delta_e > 0 or math.exp(delta_e / T) > random.random():
+        current_tour[i], current_tour[j] = current_tour[j], current_tour[i]
         current_val = next_val
-    else:
-        # random.random() is [0.0, 1.0)
-        if math.exp(delta_e / T) > random.random():
-            current_tour = next_tour
-            current_val = next_val
 
+        if current_val < best_val:
+            best_val = current_val
+            best_tour = current_tour[:]
 
-tour = current_tour
-tour_length = current_val
-
-
-
-
-
+tour = best_tour
+tour_length = best_val
 
 
 
