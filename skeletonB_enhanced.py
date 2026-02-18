@@ -358,16 +358,17 @@ added_note = ""
 
 
 # ---- parameters ----
-max_it = 500       # iterations (set based on time budget)
+max_it = 5000       # iterations (set based on time budget)
 num_parts = 60      # N particles
-delta = int(0.8 * num_cities)          # neighbourhood {dist(p^a_b, p^b_t) <= delta }
-theta = 0.85         # inertia function
-alpha = 0.3        # cognitive learning factor
-beta = 0.6          # social learning factor
-v_max = 100          # cap velocity length
+delta = 12          # neighbourhood {dist(p^a_b, p^b_t) <= delta }
+theta = 0.6         # inertia function
+alpha = 0.75         # cognitive learning factor
+beta = 2.7        # social learning factor
+v_max = 20          # cap velocity length
 
 
-# find tour length
+
+# initialize tour length
 def tour_length(tour, dm):
     n = len(tour) # length of argument
     total = 0
@@ -442,7 +443,7 @@ def concat_velocity(v1, v2, v3):
 # Simple choice: Hamming distance on positions (how many indices differ).
 # -----------------------------
 def tour_distance_hamming(p, q):
-    return sum(1 for i in range(len(p)) if p[i] != q[i])    # number of different positions in two tours
+    return sum(1 for i in range(len(p)) if p[i] != q[i])
 
 
 # ============================================================
@@ -452,7 +453,7 @@ def PSO(max_it, N, delta, dm,
             theta=0.7, alpha=0.7, beta=0.7,
             v_max=None, seed=None):
     """
-
+    
     pa_t  : particle a's current tour (position)
     v a_t : particle a's velocity (swap sequence)
     p̂ a_t: particle a's personal best tour so far
@@ -466,20 +467,19 @@ def PSO(max_it, N, delta, dm,
     - delta: neighbourhood radius in Hamming distance
     - v_max: optional cap on velocity length (keeps swaps from exploding)
     """
-    if seed is not None:    # reproduce a tour
+    if seed is not None:
         random.seed(seed)
 
     n_cities = len(dm)
 
     # ------------------------------------------------------------
-    # for a = 1 to N do: initialise p^a_0, p̂^a_0, v^a_0
+    # for a = 1 to N do: initialise pa0, p̂a0, va0
     # ------------------------------------------------------------
-    p = []          # holds tour of every particle; p[a] = pa_t (current tour of a)
-    v = []          # holds swaps for every particle; v[a] = va_t (velocity: list of swaps of a)
-    phat = []       # holds personal best of all particles; phat[a] = p̂a_t (personal best tour of a)
-    phat_val = []   # lengths of all personal bests; phat_val[a] = k where k is an integer representing a's personal best tour length 
-    sample_k = 40
-    sample_index = random.sample(range(n_cities), sample_k)
+    p = []       # p[a] = pa_t (current tour)
+    v = []       # v[a] = va_t (velocity: list of swaps)
+    phat = []    # phat[a] = p̂a_t (personal best tour)
+    phat_val = []# lengths of personal bests (so min is fast)
+
     for a in range(N):
         pa0 = list(range(n_cities))
         random.shuffle(pa0)
@@ -487,7 +487,7 @@ def PSO(max_it, N, delta, dm,
         # randomly initialise velocity va0 ∈ A*
         # simplest: a few random swaps
         if v_max is None:
-            init_len = max(1, n_cities // 30)
+            init_len = max(1, n_cities // 10)
         else:
             init_len = max(1, min(v_max, n_cities // 10))
         va0 = [tuple(random.sample(range(n_cities), 2)) for _ in range(init_len)]
@@ -500,13 +500,15 @@ def PSO(max_it, N, delta, dm,
         phat_val.append(val0)
 
     # pbest = min{ p̂a0 : a=1..N }
-    best_index = min(range(N), key=lambda a: phat_val[a])     # find particle with shortest pb
-    pbest = phat[best_index][:]
-    pbest_val = phat_val[best_index]
+    best_idx = min(range(N), key=lambda a: phat_val[a])
+    pbest = phat[best_idx][:]
+    pbest_val = phat_val[best_idx]
 
-    # iteration time!
+    # ------------------------------------------------------------
+    # t = 0; while t < max_it do ...
+    # ------------------------------------------------------------
     t = 0
-    while t < max_it:   # max_it is number of iterations
+    while t < max_it:
         # for a = 1..N do
         for a in range(N):
 
@@ -515,18 +517,12 @@ def PSO(max_it, N, delta, dm,
             neigh = []
             pa = p[a]
             for b in range(N):
-                d = 0
-                for i in sample_index:
-                    if pa[i] != p[b][i]:
-                        d += 1
-                        if d > delta:
-                            break
-                if d <= delta:
+                if tour_distance_hamming(pa, p[b]) <= delta:
                     neigh.append(b)
 
             # choose neighbour-best based on personal best lengths
-            na_index = min(neigh, key=lambda b: phat_val[b])
-            na = phat[na_index]
+            na_idx = min(neigh, key=lambda b: phat_val[b])
+            na = phat[na_idx]
 
             # pa_{t+1} = pa_t + va_t
             pa_next = apply_velocity(pa, v[a])
@@ -544,8 +540,8 @@ def PSO(max_it, N, delta, dm,
             # to match the pseudocode structure.
             inert = scale_velocity(theta, v[a])
 
-            toward_pbest = diff_velocity(phat[a], pa_next)   # (p̂a - pa)
-            toward_nbest = diff_velocity(na, pa_next)        # (na - pa)
+            toward_pbest = diff_velocity(phat[a], pa)   # (p̂a - pa)
+            toward_nbest = diff_velocity(na, pa)        # (na - pa)
 
             cog = pick_random_swaps(toward_pbest, alpha)
             soc = pick_random_swaps(toward_nbest, beta)
@@ -570,7 +566,14 @@ def PSO(max_it, N, delta, dm,
     # output pbest
     return pbest, pbest_val
 
-
+# ---- choose parameters (must be defined before calling) ----
+max_it = 5000        # iterations (set based on time budget)
+num_parts = 60       # N particles
+delta = 12          # neighbourhood radius (Hamming)
+theta = 0.8
+alpha = 0.6
+beta = 0.6
+v_max = 20          # cap velocity length
 
 # ---- run PSO and assign required outputs for Sector 10 ----
 tour, tour_length = PSO(

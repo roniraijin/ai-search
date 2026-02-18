@@ -295,7 +295,7 @@ my_last_name = "cakmak"
 ############
 ############ END OF SECTOR 7 (IGNORE THIS COMMENT)
 
-algorithm_code = "PS"
+algorithm_code = "SA"
 
 ############ START OF SECTOR 8 (IGNORE THIS COMMENT)
 ############
@@ -356,235 +356,82 @@ added_note = ""
 ############
 ############ END OF SECTOR 9 (IGNORE THIS COMMENT)
 
+dm = dist_matrix
+n = num_cities
 
-# ---- parameters ----
-max_it = 500       # iterations (set based on time budget)
-num_parts = 60      # N particles
-delta = int(0.8 * num_cities)          # neighbourhood {dist(p^a_b, p^b_t) <= delta }
-theta = 0.85         # inertia function
-alpha = 0.3        # cognitive learning factor
-beta = 0.6          # social learning factor
-v_max = 100          # cap velocity length
+def swap_delta(tour, i, j):
+    if i == j:
+        return 0
+    if i > j:
+        i, j = j, i
 
+    a = tour[i]
+    b = tour[j]
 
-# find tour length
-def tour_length(tour, dm):
-    n = len(tour) # length of argument
-    total = 0
-    for k in range(n - 1):
-        total += dm[tour[k]][tour[k + 1]]       # O(n) method to find tour length
-    total += dm[tour[n - 1]][tour[0]]       
-    return total
+    im1 = tour[(i - 1) % n]
+    ip1 = tour[(i + 1) % n]
+    jm1 = tour[(j - 1) % n]
+    jp1 = tour[(j + 1) % n]
 
+    # Adjacent in the tour order includes wrap-around adjacency (0 and n-1)
+    adjacent = (j == i + 1) or (i == 0 and j == n - 1)
 
-# -----------------------------
-# Velocity operators (A*)
-# velocity v is a list of swaps: [(i,j), ...]
-# -----------------------------
-
-def apply_velocity(tour, velocity):
-    """Return p + v : apply swap-sequence velocity to a copy of tour."""
-    p = tour[:]  # keep original unchanged by making new variable
-    for (i, j) in velocity:
-        p[i], p[j] = p[j], p[i]     # atomic amendments applied to our tour
-    return p
-
-def diff_velocity(target, current):
-    """
-    Return (target - current): a swap sequence that transforms current into target.
-    This produces at most n-1 swaps.
-    """
-    n = len(current)    # number of cities
-    p = current[:]      # as stated before, keep original unchanged
-    pos = [0] * n       # new list of size n with only 0's
-    for index, city in enumerate(p):    
-        pos[city] = index   # a lookup table to map position of each city 
-
-    swaps = []
-    for i in range(n):
-        if p[i] != target[i]:   # true if positions dont match
-            j = pos[target[i]]
-            # swap positions i and j
-            swaps.append((i, j))    # append where i is and where it should be (j)
-            a, b = p[i], p[j]
-            p[i], p[j] = p[j], p[i]
-            pos[a], pos[b] = j, i
-    return swaps
-
-def scale_velocity(theta, v):   #inertia function
-    """Return θ v : keep only the first fraction theta of swaps."""
-    if theta <= 0:
-        return []
-    if theta >= 1:
-        return v[:]
-    k = int(theta * len(v))
-    return v[:k]
-
-def pick_random_swaps(v, prob):
-    """
-    Return ε · v : keep each swap with probability prob (0..1).
-    This models αε.(...) and βε'.(...)
-    """
-    if prob <= 0:
-        return []
-    if prob >= 1:
-        return v[:]
-    return [s for s in v if random.random() < prob]
-
-def concat_velocity(v1, v2, v3):
-    """Combine swap lists. (You can also deduplicate if you want, but not required.)"""
-    return v1 + v2 + v3
-
-
-# -----------------------------
-# Particle "distance" for neighbourhood Δt(a)
-# We need dist(p_a, p_b) to decide if b is within δ of a.
-# Simple choice: Hamming distance on positions (how many indices differ).
-# -----------------------------
-def tour_distance_hamming(p, q):
-    return sum(1 for i in range(len(p)) if p[i] != q[i])    # number of different positions in two tours
-
-
-# ============================================================
-# Procedure PSO(max_it, N, δ)  (Discrete / Permutation PSO)
-# ============================================================
-def PSO(max_it, N, delta, dm,
-            theta=0.7, alpha=0.7, beta=0.7,
-            v_max=None, seed=None):
-    """
-
-    pa_t  : particle a's current tour (position)
-    v a_t : particle a's velocity (swap sequence)
-    p̂ a_t: particle a's personal best tour so far
-    n a_t : best personal-best among neighbours within δ (nbest / local best)
-    pbest : global best among all particles
-
-    Parameters:
-    - theta: inertia factor for velocity list length
-    - alpha: probability scale for including swaps from (p̂a - pa)
-    - beta : probability scale for including swaps from (na - pa)
-    - delta: neighbourhood radius in Hamming distance
-    - v_max: optional cap on velocity length (keeps swaps from exploding)
-    """
-    if seed is not None:    # reproduce a tour
-        random.seed(seed)
-
-    n_cities = len(dm)
-
-    # ------------------------------------------------------------
-    # for a = 1 to N do: initialise p^a_0, p̂^a_0, v^a_0
-    # ------------------------------------------------------------
-    p = []          # holds tour of every particle; p[a] = pa_t (current tour of a)
-    v = []          # holds swaps for every particle; v[a] = va_t (velocity: list of swaps of a)
-    phat = []       # holds personal best of all particles; phat[a] = p̂a_t (personal best tour of a)
-    phat_val = []   # lengths of all personal bests; phat_val[a] = k where k is an integer representing a's personal best tour length 
-    sample_k = 40
-    sample_index = random.sample(range(n_cities), sample_k)
-    for a in range(N):
-        pa0 = list(range(n_cities))
-        random.shuffle(pa0)
-
-        # randomly initialise velocity va0 ∈ A*
-        # simplest: a few random swaps
-        if v_max is None:
-            init_len = max(1, n_cities // 30)
+    if adjacent:
+        # Ensure we treat them in the order ... im1 - a - b - jp1 ...
+        # If it's wrap-around adjacency, the order is ... jm1 - b - a - ip1 ... effectively
+        if j == i + 1:
+            old = dm[im1][a] + dm[a][b] + dm[b][jp1]
+            new = dm[im1][b] + dm[b][a] + dm[a][jp1]
         else:
-            init_len = max(1, min(v_max, n_cities // 10))
-        va0 = [tuple(random.sample(range(n_cities), 2)) for _ in range(init_len)]
+            # i=0, j=n-1 (wrap). Tour fragment: ... jm1 - b - a - ip1 ...
+            old = dm[jm1][b] + dm[b][a] + dm[a][ip1]
+            new = dm[jm1][a] + dm[a][b] + dm[b][ip1]
+    else:
+        old = dm[im1][a] + dm[a][ip1] + dm[jm1][b] + dm[b][jp1]
+        new = dm[im1][b] + dm[b][ip1] + dm[jm1][a] + dm[a][jp1]
 
-        p.append(pa0)
-        v.append(va0)
-        phat.append(pa0[:])
+    return new - old
 
-        val0 = tour_length(pa0, dm)
-        phat_val.append(val0)
+current_tour = list(range(n))
+random.shuffle(current_tour)
 
-    # pbest = min{ p̂a0 : a=1..N }
-    best_index = min(range(N), key=lambda a: phat_val[a])     # find particle with shortest pb
-    pbest = phat[best_index][:]
-    pbest_val = phat_val[best_index]
+# initial length (O(n) once)
+tour_length = 0
+for k in range(n - 1):
+    tour_length += dm[current_tour[k]][current_tour[k+1]]
+tour_length += dm[current_tour[n-1]][current_tour[0]]
 
-    # iteration time!
-    t = 0
-    while t < max_it:   # max_it is number of iterations
-        # for a = 1..N do
-        for a in range(N):
+current_val = tour_length
+best_tour = current_tour[:]
+best_val = current_val
 
-            # Δt(a) = { b : dist(pa_t, pb_t) ≤ δ }
-            # na_t = min{ p̂b_t : b ∈ Δt(a) }
-            neigh = []
-            pa = p[a]
-            for b in range(N):
-                d = 0
-                for i in sample_index:
-                    if pa[i] != p[b][i]:
-                        d += 1
-                        if d > delta:
-                            break
-                if d <= delta:
-                    neigh.append(b)
+T = 50
+cooling_rate = 0.999999
 
-            # choose neighbour-best based on personal best lengths
-            na_index = min(neigh, key=lambda b: phat_val[b])
-            na = phat[na_index]
+while T > 0.0001:
+    T *= cooling_rate
 
-            # pa_{t+1} = pa_t + va_t
-            pa_next = apply_velocity(pa, v[a])
+    i, j = random.sample(range(n), 2)
 
-            # evaluate pa_{t+1}
-            pa_next_val = tour_length(pa_next, dm)
+    delta = swap_delta(current_tour, i, j)   # next - current
+    next_val = current_val + delta
 
-            # p̂a_{t+1} = min{ pa_{t+1}, p̂a_t }
-            if pa_next_val < phat_val[a]:
-                phat[a] = pa_next[:]          # update personal best tour
-                phat_val[a] = pa_next_val     # update its length
+    delta_e = current_val - next_val         # current - next
 
-            # va_{t+1} = θ va_t + αε.(p̂a_t − pa_t) + βε'.(na_t − pa_t)
-            # NOTE: Here we use differences computed from CURRENT pa (before applying v)
-            # to match the pseudocode structure.
-            inert = scale_velocity(theta, v[a])
+    if delta_e > 0 or math.exp(delta_e / T) > random.random():
+        current_tour[i], current_tour[j] = current_tour[j], current_tour[i]
+        current_val = next_val
 
-            toward_pbest = diff_velocity(phat[a], pa_next)   # (p̂a - pa)
-            toward_nbest = diff_velocity(na, pa_next)        # (na - pa)
+        if current_val < best_val:
+            best_val = current_val
+            best_tour = current_tour[:]
 
-            cog = pick_random_swaps(toward_pbest, alpha)
-            soc = pick_random_swaps(toward_nbest, beta)
-
-            v_next = concat_velocity(inert, cog, soc)
-
-            # optional: cap velocity length to prevent blow-up
-            if v_max is not None and len(v_next) > v_max:
-                v_next = v_next[:v_max]
-
-            # commit updates: pa_{t+1}, va_{t+1}
-            p[a] = pa_next
-            v[a] = v_next
-
-            # pbest = min( pbest ∪ { p̂a_{t+1} } )
-            if phat_val[a] < pbest_val:
-                pbest_val = phat_val[a]
-                pbest = phat[a][:]
-
-        t += 1
-
-    # output pbest
-    return pbest, pbest_val
+tour = best_tour
+tour_length = best_val
 
 
 
-# ---- run PSO and assign required outputs for Sector 10 ----
-tour, tour_length = PSO(
-    max_it=max_it,
-    N=num_parts,
-    delta=delta,
-    dm=dist_matrix,
-    theta=theta,
-    alpha=alpha,
-    beta=beta,
-    v_max=v_max
-)
 
-tour_length = int(tour_length)  # keep Sector 10 happy (should already be int)
 
 
 
