@@ -295,7 +295,7 @@ my_last_name = "cakmak"
 ############
 ############ END OF SECTOR 7 (IGNORE THIS COMMENT)
 
-algorithm_code = "PS"
+algorithm_code = "AC"
 
 ############ START OF SECTOR 8 (IGNORE THIS COMMENT)
 ############
@@ -356,238 +356,159 @@ added_note = ""
 ############
 ############ END OF SECTOR 9 (IGNORE THIS COMMENT)
 
+# ============================================================
+# Procedure ACO(G=(V,E), max_it, N, tau0)  (Base ACO for TSP)
+# - builds N ant tours per iteration using pheromone + heuristic
+# - evaporates pheromone and deposits on edges from the best tour
+# - stops after max_it or ~60 seconds (whichever first)
+# - outputs best tour found
+# ============================================================
 
-# ---- parameters ----
-max_it = 5000       # iterations (set based on time budget)
-num_parts = 100      # N particles
-sample_k = min(40, num_cities)          # sample size for neighbourhood distance
-delta = int(0.9 * sample_k)         # neighbourhood {dist(p^a_b, p^b_t) <= delta }
-theta = 0.65         # inertia function
-alpha = 0.3        # cognitive learning factor
-beta = 0.6          # social learning factor
-v_max = int(0.4 * num_cities)          # cap velocity length
+# ---- parameters (base) ----
+max_it = 500                   # we will stop by time_limit anyway
+num_ants = 30                  # N (good default across sizes)
+tau0 = 1.0                     # initial pheromone τ0
+rho = 0.2                      # evaporation rate (0<rho<1)
+alpha = 1.0                    # pheromone influence
+beta = 2.0                     # heuristic influence
+q = 100.0                      # deposit strength (scales pheromone laid)
+time_limit = 60.0              # seconds
 
+n = num_cities
+dm = dist_matrix
 
-# find tour length
+# -----------------------------
+# Utility: tour length
+# -----------------------------
 def tour_length(tour, dm):
-    n = len(tour) # length of argument
     total = 0
-    for k in range(n - 1):
-        total += dm[tour[k]][tour[k + 1]]       # O(n) method to find tour length
-    total += dm[tour[n - 1]][tour[0]]       
+    for i in range(n - 1):
+        total += dm[tour[i]][tour[i + 1]]
+    total += dm[tour[n - 1]][tour[0]]
     return total
 
+# -----------------------------
+# Initialise pheromone τ on each edge at τ0
+# τ is symmetric because distances are symmetric
+# -----------------------------
+tau = [[tau0 for _ in range(n)] for _ in range(n)]
 
 # -----------------------------
-# Velocity operators (A*)
-# velocity v is a list of swaps: [(i,j), ...]
+# Precompute heuristic desirability η(i,j) = 1 / dist(i,j)
+# Use a tiny epsilon to avoid division by zero if any distance is 0
 # -----------------------------
+eps = 1e-9
+eta = [[0.0 for _ in range(n)] for _ in range(n)]
+for i in range(n):
+    for j in range(n):
+        if i != j:
+            eta[i][j] = 1.0 / (dm[i][j] + eps)     # in the case the dm is 0, eps prevents a crash whilst not affecting the results
 
-def apply_velocity(tour, velocity):
-    """Return p + v : apply swap-sequence velocity to a copy of tour."""
-    p = tour[:]  # keep original unchanged by making new variable
-    for (i, j) in velocity:
-        p[i], p[j] = p[j], p[i]     # atomic amendments applied to our tour
-    return p
+# -----------------------------
+# initialise best
+# -----------------------------
+best_tour = None
+best_val = float("inf")
 
-def diff_velocity(target, current):
-    """
-    Return (target - current): a swap sequence that transforms current into target.
-    This produces at most n-1 swaps.
-    """
-    n = len(current)    # number of cities
-    p = current[:]      # as stated before, keep original unchanged
-    pos = [0] * n       # new list of size n with only 0's
-    for index, city in enumerate(p):    
-        pos[city] = index   # a lookup table to map position of each city 
+# ============================================================
+# build a solution for one ant by stochastically building a trail
+# ============================================================
+def build_ant_tour(start_city):
+    visited = [False] * n
+    tour = [start_city]
+    visited[start_city] = True
+    current = start_city
 
-    swaps = []
+    # build a trail with |V| edge additions (n-1 choices after start)
+    for _ in range(n - 1):
+        # compute probabilities for all unvisited cities
+        probs = []
+        candidates = []
+
+        denom = 0.0
+        for j in range(n):
+            if not visited[j]:
+                w = (tau[current][j] ** alpha) * (eta[current][j] ** beta)
+                candidates.append(j)
+                probs.append(w)
+                denom += w
+
+        # fallback: if denom==0 (shouldn't happen), pick uniformly
+        if denom <= 0.0:
+            nxt = random.choice(candidates)
+        else:
+            # roulette wheel selection
+            r = random.random() * denom
+            acc = 0.0
+            nxt = candidates[-1]
+            for j, w in zip(candidates, probs):
+                acc += w
+                if acc >= r:
+                    nxt = j
+                    break
+
+        tour.append(nxt)
+        visited[nxt] = True
+        current = nxt
+
+    return tour
+
+# ============================================================
+# Main ACO loop
+# ============================================================
+t = 0
+while t < max_it:
+    # time-based stop (prof runs many files; must return best so far)
+    #if time.time() - start_time >= time_limit:
+     #   break
+
+    # place ants on vertices (random starts)
+    ant_tours = []
+    ant_vals = []
+
+    for k in range(num_ants):
+        start_city = random.randrange(n)
+        tour_k = build_ant_tour(start_city)
+        val_k = tour_length(tour_k, dm)
+
+        ant_tours.append(tour_k)
+        ant_vals.append(val_k)
+
+        # if improved solution is found then update best
+        if val_k < best_val:
+            best_val = val_k
+            best_tour = tour_k[:]
+
+    # deposit/evaporate pheromone on edges
+    # evaporate: τ(i,j) <- (1-rho) τ(i,j)
+    evap = 1.0 - rho
     for i in range(n):
-        if p[i] != target[i]:   # true if positions dont match
-            j = pos[target[i]]
-            # swap positions i and j
-            swaps.append((i, j))    # append where i is and where it should be (j)
-            a, b = p[i], p[j]
-            p[i], p[j] = p[j], p[i]
-            pos[a], pos[b] = j, i
-    return swaps
+        row = tau[i]
+        for j in range(n):
+            row[j] *= evap
 
-def scale_velocity(theta, v):   #inertia function
-    """Return θ v : keep only the first fraction theta of swaps."""
-    if theta <= 0:
-        return []
-    if theta >= 1:
-        return v[:]
-    k = int(theta * len(v))
-    return v[:k]
+    # deposit on edges of the best tour THIS iteration (iteration-best)
+    iter_best_idx = min(range(num_ants), key=lambda k: ant_vals[k])
+    iter_best_tour = ant_tours[iter_best_idx]
+    iter_best_val = ant_vals[iter_best_idx]
 
-def pick_random_swaps(v, prob):
-    """
-    Return ε · v : keep each swap with probability prob (0..1).
-    This models αε.(...) and βε'.(...)
-    """
-    if prob <= 0:
-        return []
-    if prob >= 1:
-        return v[:]
-    return [s for s in v if random.random() < prob]
+    deposit = q / (iter_best_val + eps)
+    for i in range(n - 1):
+        a = iter_best_tour[i]
+        b = iter_best_tour[i + 1]
+        tau[a][b] += deposit
+        tau[b][a] += deposit
+    # closing edge
+    a = iter_best_tour[n - 1]
+    b = iter_best_tour[0]
+    tau[a][b] += deposit
+    tau[b][a] += deposit
 
-def concat_velocity(v1, v2, v3):
-    """Combine swap lists. (You can also deduplicate if you want, but not required.)"""
-    return v1 + v2 + v3
+    t += 1
 
-
-# -----------------------------
-# Particle "distance" for neighbourhood Δt(a)
-# We need dist(p_a, p_b) to decide if b is within δ of a.
-# Simple choice: Hamming distance on positions (how many indices differ).
-# -----------------------------
-def tour_distance_hamming(p, q):
-    return sum(1 for i in range(len(p)) if p[i] != q[i])    # number of different positions in two tours
-
-
-# ============================================================
-# Procedure PSO(max_it, N, δ)  (Discrete / Permutation PSO)
-# ============================================================
-def PSO(max_it, N, delta, dm,
-        theta=0.7, alpha=0.7, beta=0.7,
-        v_max=None, seed=None, sample_k=40):
-    """
-
-    pa_t  : particle a's current tour (position)
-    v a_t : particle a's velocity (swap sequence)
-    p̂ a_t: particle a's personal best tour so far
-    n a_t : best personal-best among neighbours within δ (nbest / local best)
-    pbest : global best among all particles
-
-    Parameters:
-    - theta: inertia factor for velocity list length
-    - alpha: probability scale for including swaps from (p̂a - pa)
-    - beta : probability scale for including swaps from (na - pa)
-    - delta: neighbourhood radius in Hamming distance
-    - v_max: optional cap on velocity length (keeps swaps from exploding)
-    """
-    if seed is not None:    # reproduce a tour
-        random.seed(seed)
-
-    n_cities = len(dm)
-
-    # ------------------------------------------------------------
-    # for a = 1 to N do: initialise p^a_0, p̂^a_0, v^a_0
-    # ------------------------------------------------------------
-    p = []          # holds tour of every particle; p[a] = pa_t (current tour of a)
-    v = []          # holds swaps for every particle; v[a] = va_t (velocity: list of swaps of a)
-    phat = []       # holds personal best of all particles; phat[a] = p̂a_t (personal best tour of a)
-    phat_val = []   # lengths of all personal bests; phat_val[a] = k where k is an integer representing a's personal best tour length 
-
-
-    for a in range(N):
-        pa0 = list(range(n_cities))
-        random.shuffle(pa0)
-
-        # randomly initialise velocity va0 ∈ A*
-        # simplest: a few random swaps
-        init_len = max(1, min(v_max if v_max is not None else n_cities, n_cities // 30))
-        va0 = [tuple(random.sample(range(n_cities), 2)) for _ in range(init_len)]
-
-        p.append(pa0)
-        v.append(va0)
-        phat.append(pa0[:])
-
-        val0 = tour_length(pa0, dm)
-        phat_val.append(val0)
-
-    # pbest = min{ p̂a0 : a=1..N }
-    best_index = min(range(N), key=lambda a: phat_val[a])     # find particle with shortest pb
-    pbest = phat[best_index][:]
-    pbest_val = phat_val[best_index]
-
-    # iteration time!
-    t = 0
-    while t < max_it:   # max_it is number of iterations
-        
-        if t % 20 == 0:
-            sample_index = random.sample(range(n_cities), sample_k)     # every 20 iterations, resample the neighbourhood cities
-        # for a = 1..N do
-        for a in range(N):
-
-            # Δt(a) = { b : dist(pa_t, pb_t) ≤ δ }
-            # na_t = min{ p̂b_t : b ∈ Δt(a) }
-            neigh = []
-            pa = p[a]
-            for b in range(N):
-                d = 0
-                for i in sample_index:
-                    if pa[i] != p[b][i]:
-                        d += 1
-                        if d > delta:
-                            break
-                if d <= delta:
-                    neigh.append(b)
-
-            # choose neighbour-best based on personal best lengths
-            na_index = min(neigh, key=lambda b: phat_val[b])
-            na = phat[na_index]
-
-            # pa_{t+1} = pa_t + va_t
-            pa_next = apply_velocity(pa, v[a])
-
-            # evaluate pa_{t+1}
-            pa_next_val = tour_length(pa_next, dm)
-
-            # p̂a_{t+1} = min{ pa_{t+1}, p̂a_t }
-            if pa_next_val < phat_val[a]:
-                phat[a] = pa_next[:]          # update personal best tour
-                phat_val[a] = pa_next_val     # update its length
-
-            # va_{t+1} = θ va_t + αε.(p̂a_t − pa_t) + βε'.(na_t − pa_t)
-            # NOTE: Here we use differences computed from CURRENT pa (before applying v)
-            # to match the pseudocode structure.
-            inert = scale_velocity(theta, v[a])
-
-            toward_pbest = diff_velocity(phat[a], pa_next)   # (p̂a - pa)
-            toward_nbest = diff_velocity(na, pa_next)        # (na - pa)
-
-            cog = pick_random_swaps(toward_pbest, alpha)
-            soc = pick_random_swaps(toward_nbest, beta)
-
-            v_next = concat_velocity(inert, cog, soc)
-
-            # optional: cap velocity length to prevent blow-up
-            if v_max is not None and len(v_next) > v_max:
-                v_next = v_next[:v_max]
-
-            # commit updates: pa_{t+1}, va_{t+1}
-            p[a] = pa_next
-            v[a] = v_next
-
-            # pbest = min( pbest ∪ { p̂a_{t+1} } )
-            if phat_val[a] < pbest_val:
-                pbest_val = phat_val[a]
-                pbest = phat[a][:]
-
-        t += 1
-
-    # output pbest
-    return pbest, pbest_val
-
-
-
-# ---- run PSO and assign required outputs for Sector 10 ----
-tour, tour_length = PSO(
-    max_it=max_it,
-    N=num_parts,
-    delta=delta,
-    dm=dist_matrix,
-    theta=theta,
-    alpha=alpha,
-    beta=beta,
-    v_max=v_max,
-    sample_k=sample_k
-)
-
-tour_length = int(tour_length)  # keep Sector 10 happy (should already be int)
-
+# output best
+tour = best_tour
+tour_length = int(best_val)
 
 
 
