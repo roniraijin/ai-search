@@ -358,13 +358,14 @@ added_note = ""
 
 
 # ---- parameters ----
-max_it = 500       # iterations (set based on time budget)
-num_parts = 60      # N particles
-delta = int(0.8 * num_cities)          # neighbourhood {dist(p^a_b, p^b_t) <= delta }
-theta = 0.85         # inertia function
+max_it = 5000       # iterations (set based on time budget)
+num_parts = 100      # N particles
+sample_k = min(40, num_cities)          # sample size for neighbourhood distance
+delta = int(0.9 * sample_k)         # neighbourhood {dist(p^a_b, p^b_t) <= delta }
+theta = 0.65         # inertia function
 alpha = 0.3        # cognitive learning factor
 beta = 0.6          # social learning factor
-v_max = 100          # cap velocity length
+v_max = int(0.4 * num_cities)          # cap velocity length
 
 
 # find tour length
@@ -449,8 +450,8 @@ def tour_distance_hamming(p, q):
 # Procedure PSO(max_it, N, δ)  (Discrete / Permutation PSO)
 # ============================================================
 def PSO(max_it, N, delta, dm,
-            theta=0.7, alpha=0.7, beta=0.7,
-            v_max=None, seed=None):
+        theta=0.7, alpha=0.7, beta=0.7,
+        v_max=None, seed=None, sample_k=40):
     """
 
     pa_t  : particle a's current tour (position)
@@ -478,18 +479,15 @@ def PSO(max_it, N, delta, dm,
     v = []          # holds swaps for every particle; v[a] = va_t (velocity: list of swaps of a)
     phat = []       # holds personal best of all particles; phat[a] = p̂a_t (personal best tour of a)
     phat_val = []   # lengths of all personal bests; phat_val[a] = k where k is an integer representing a's personal best tour length 
-    sample_k = 40
-    sample_index = random.sample(range(n_cities), sample_k)
+
+
     for a in range(N):
         pa0 = list(range(n_cities))
         random.shuffle(pa0)
 
         # randomly initialise velocity va0 ∈ A*
         # simplest: a few random swaps
-        if v_max is None:
-            init_len = max(1, n_cities // 30)
-        else:
-            init_len = max(1, min(v_max, n_cities // 10))
+        init_len = max(1, min(v_max if v_max is not None else n_cities, n_cities // 30))
         va0 = [tuple(random.sample(range(n_cities), 2)) for _ in range(init_len)]
 
         p.append(pa0)
@@ -507,6 +505,9 @@ def PSO(max_it, N, delta, dm,
     # iteration time!
     t = 0
     while t < max_it:   # max_it is number of iterations
+        
+        if t % 20 == 0:
+            sample_index = random.sample(range(n_cities), sample_k)     # every 20 iterations, resample the neighbourhood cities
         # for a = 1..N do
         for a in range(N):
 
@@ -581,7 +582,8 @@ tour, tour_length = PSO(
     theta=theta,
     alpha=alpha,
     beta=beta,
-    v_max=v_max
+    v_max=v_max,
+    sample_k=sample_k
 )
 
 tour_length = int(tour_length)  # keep Sector 10 happy (should already be int)
